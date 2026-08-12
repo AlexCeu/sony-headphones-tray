@@ -1,0 +1,17 @@
+[package]
+name = "sony-xm4-tray"
+version = "0.1.0"
+edition = "2021"
+authors = ["TheOneProgrammer <https://theoneprogrammer.com>"]
+license = "GPL-2.0-or-later"
+description = "Cambia el modo de sonido de los auriculares Sony (WH-1000XM4) desde la bandeja de KDE"
+repository = ""
+
+[dependencies]
+ksni = { version = "0.3", features = ["blocking"] }
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

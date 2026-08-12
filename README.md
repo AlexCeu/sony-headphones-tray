@@ -1,13 +1,13 @@
-# Sony XM4 Tray
+# Sony Headphones Tray
 
-Control del modo de sonido de los auriculares Sony WH-1000XM4 desde la bandeja del sistema (KDE Plasma) usando el protocolo **StatusNotifierItem**.
+Control del modo de sonido de los auriculares Sony desde la bandeja del sistema (KDE Plasma) usando el protocolo **StatusNotifierItem**.
 
 ## Características
 
 - Icono de bandeja que muestra el perfil actual aplicado (tooltip) y permite cambiarlo por menú.
 - Perfiles: Cancelación de ruido, Reducción de viento, Sonido ambiente, Sin cancelación (OFF).
 - Detección automática del dispositivo desde `bluetoothctl devices`; si hay varios, selector gráfico en el menú.
-- El perfil elegido se persiste en `~/.config/sony-xm4-tray/` y se reenvía al arrancar si se pide.
+- El perfil elegido se persiste en `~/.config/sony-headphones-tray/` y se reenvía al arrancar si se pide.
 - Notificaciones del escritorio (`notify-send`, con fallback a `kdialog`) al cambiar de perfil y al consultar la MAC.
 
 ## Requisitos / escritorios
@@ -28,17 +28,17 @@ Mismo protocolo RFCOMM (canal 9, UUID `96cc203e-5068-46ad-b32d-e316f5e069ba`), s
 ## Uso
 
 ```sh
-sony-xm4-tray
+sony-headphones-tray
 ```
 
 - Si no hay MAC configurada, usa el submenú "Elegir dispositivo (Bluetooth)" para seleccionarla.
-- Config alternativa: `~/.config/sony-xm4-tray/mac`, variable `XM4_MAC` o `--mac <addr>`.
+- Config alternativa: `~/.config/sony-headphones-tray/mac`, variable `XM4_MAC` o `--mac <addr>`.
 
 ## Compilar
 
 ```sh
 cargo build --release
-cp target/release/sony-xm4-tray ~/.local/bin/
+cp target/release/sony-headphones-tray ~/.local/bin/
 ```
 
 ## Autor y créditos

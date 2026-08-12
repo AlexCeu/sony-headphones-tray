@@ -199,7 +199,7 @@ fn notify(title: &str, body: &str) {
 
 fn show_about() {
     let text = format!(
-        "Sony XM4 Tray v{}\n\
+        "Sony Headphones Tray v{}\n\
          \n\
          Control del modo de sonido de auriculares Sony\ndesde la bandeja de KDE.\n\
          \n\
@@ -215,7 +215,7 @@ fn show_about() {
     );
     std::thread::spawn(move || {
         let _ = Command::new("kdialog")
-            .args(["--title", "Acerca de Sony XM4 Tray", "--msgbox", &text])
+            .args(["--title", "Acerca de Sony Headphones Tray", "--msgbox", &text])
             .output();
     });
 }
@@ -280,7 +280,7 @@ impl SonyTray {
         st.devices = list_sony_devices();
         st.devices_fetched_at = Some(Instant::now());
         if st.devices.is_empty() {
-            st.msg = "No se encontró ningún XM4 pareado".into();
+            st.msg = "No se encontró ningún auricular Sony pareado".into();
         }
     }
 
@@ -309,7 +309,7 @@ impl SonyTray {
                 Err(e) => format!("Error: {e}"),
             };
             state.lock().unwrap().msg = status.clone();
-            notify("Sony XM4", &status);
+            notify("Sony Headphones", &status);
             if let Some(handle) = HANDLE.get() {
                 handle.update(|_| {});
             }
@@ -323,11 +323,11 @@ impl Tray for SonyTray {
     const MENU_ON_ACTIVATE: bool = true;
 
     fn id(&self) -> String {
-        "sony-xm4-tray".into()
+        "sony-headphones-tray".into()
     }
 
     fn title(&self) -> String {
-        "Sony XM4".into()
+        "Sony Headphones".into()
     }
 
     fn icon_name(&self) -> String {
@@ -341,7 +341,7 @@ impl Tray for SonyTray {
     fn tool_tip(&self) -> ToolTip {
         let st = self.state.lock().unwrap();
         ToolTip {
-            title: "Sony WH-1000XM4".into(),
+            title: "Sony Headphones".into(),
             description: format!("Perfil: {}\n{}", st.profile.label(), st.msg),
             ..Default::default()
         }
@@ -355,7 +355,7 @@ impl Tray for SonyTray {
             if st.devices.is_empty() {
                 children.push(
                     StandardItem {
-                        label: "No se encontró ningún XM4 pareado".into(),
+                        label: "No se encontró ningún auricular Sony pareado".into(),
                         enabled: false,
                         disposition: ksni::menu::Disposition::Informative,
                         ..Default::default()
@@ -466,11 +466,11 @@ impl Tray for SonyTray {
                             "MAC no configurada: ponla en {} o elige el dispositivo en el menú",
                             config_dir().join("mac").display()
                         );
-                        notify("Sony XM4", &t);
+                        notify("Sony Headphones", &t);
                         t
                     } else {
                         let t = format!("Dispositivo actual: {}\nMAC: {}", device_label(&st.mac), st.mac);
-                        notify("Sony XM4", &t);
+                        notify("Sony Headphones", &t);
                         t
                     };
                 }),
@@ -547,11 +547,31 @@ impl Tray for SonyTray {
 fn config_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("sony-xm4-tray");
+            return PathBuf::from(xdg).join("sony-headphones-tray");
         }
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".config").join("sony-xm4-tray")
+    PathBuf::from(home).join(".config").join("sony-headphones-tray")
+}
+
+fn migrate_config() {
+    let new_dir = config_dir();
+    if new_dir.exists() {
+        return;
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let old_dir = PathBuf::from(home).join(".config").join("sony-xm4-tray");
+    if !old_dir.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&new_dir);
+    for name in ["mac", "profile"] {
+        let src = old_dir.join(name);
+        if src.exists() {
+            let _ = std::fs::copy(src, new_dir.join(name));
+        }
+    }
+    println!("Config migrada de {}", old_dir.display());
 }
 
 fn load_mac() -> String {
@@ -589,6 +609,8 @@ fn load_profile() -> Profile {
 }
 
 fn main() {
+    migrate_config();
+
     let mut mac = load_mac();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(pos) = args.iter().position(|a| a == "--mac") {
@@ -606,11 +628,11 @@ fn main() {
                 println!("Dispositivo detectado automáticamente: {} ({mac})", found[0].1);
             }
             0 => eprintln!(
-                "Aviso: no hay MAC configurada ni XM4 pareado detectado.\n  Empareja los auriculares o pon la MAC en {} /mac\n  También puedes elegirla desde el menú de la bandeja",
+                "Aviso: no hay MAC configurada ni auricular Sony pareado detectado.\n  Empareja los auriculares o pon la MAC en {} /mac\n  También puedes elegirla desde el menú de la bandeja",
                 config_dir().display()
             ),
             _ => eprintln!(
-                "Se encontraron varios XM4: elige el dispositivo desde el menú de la bandeja."
+                "Se encontraron varios dispositivos Sony: elige el dispositivo desde el menú de la bandeja."
             ),
         }
     }

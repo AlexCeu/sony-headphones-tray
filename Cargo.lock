@@ -439,7 +439,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sony-xm4-tray"
+name = "sony-headphones-tray"
 version = "0.1.0"
 dependencies = [
  "ksni",

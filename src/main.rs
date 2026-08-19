@@ -7,11 +7,15 @@
 
 use ksni::menu::{MenuItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 use ksni::{blocking::TrayMethods, ToolTip, Tray};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use zbus::blocking::{Connection, MessageIterator};
+use zbus::message::Type as MsgType;
+use zbus::{MatchRule, Message};
 
 const SERVICE_UUID: &str = "96cc203e-5068-46ad-b32d-e316f5e069ba";
 const AF_BLUETOOTH: libc::c_int = 31;
@@ -242,6 +246,8 @@ struct State {
     msg: String,
     devices: Vec<(String, String)>,
     devices_fetched_at: Option<Instant>,
+    connected: bool,
+    auto_apply: bool,
 }
 
 fn parse_sony_devices(output: &str) -> Vec<(String, String)> {
@@ -267,6 +273,163 @@ fn list_sony_devices() -> Vec<(String, String)> {
         return Vec::new();
     };
     parse_sony_devices(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn is_connected(mac: &str) -> bool {
+    if mac.trim().is_empty() {
+        return false;
+    }
+    let Ok(output) = Command::new("bluetoothctl").args(["info", mac]).output() else {
+        return false;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| {
+            let line = line.trim();
+            line.starts_with("Connected:") && line.trim_end().ends_with("yes")
+        })
+}
+
+fn path_to_mac(path: &str) -> Option<String> {
+    let segment = path.rsplit('/').next()?;
+    let mac = segment.strip_prefix("dev_")?;
+    Some(mac.replace('_', ":").to_lowercase())
+}
+
+fn send_mode_retry(mac: &str, profile: Profile) -> Result<(), String> {
+    let mut last_err = String::from("fallo desconocido");
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+        match send_mode(mac, profile) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
+fn apply_profile_on_connect(state: &Arc<Mutex<State>>) {
+    let (mac, profile, auto_apply, connected) = {
+        let st = state.lock().unwrap();
+        (
+            st.mac.clone(),
+            st.profile,
+            st.auto_apply,
+            st.connected,
+        )
+    };
+    if mac.is_empty() || !auto_apply || !connected {
+        return;
+    }
+    {
+        let mut st = state.lock().unwrap();
+        st.msg = format!("Conectado, aplicando {}…", profile.label());
+    }
+    let state = Arc::clone(state);
+    std::thread::spawn(move || {
+        let result = send_mode_retry(&mac, profile);
+        let status = match result {
+            Ok(()) => format!("{} aplicado al conectar ✓", profile.label()),
+            Err(e) => format!("Conectado, pero no se pudo aplicar el perfil: {e}"),
+        };
+        state.lock().unwrap().msg = status.clone();
+        notify("Sony Headphones", &status);
+        if let Some(handle) = HANDLE.get() {
+            handle.update(|_| {});
+        }
+    });
+}
+
+fn handle_bluez_signal(msg: &Message, state: &Arc<Mutex<State>>) {
+    let header = msg.header();
+    let Some(path) = header.path() else {
+        return;
+    };
+    let Some(dev_mac) = path_to_mac(path.as_str()) else {
+        return;
+    };
+    let Ok((iface, changed, _invalidated)) = msg
+        .body()
+        .deserialize::<(String, HashMap<String, zbus::zvariant::OwnedValue>, Vec<String>)>()
+    else {
+        return;
+    };
+    if iface != "org.bluez.Device1" {
+        return;
+    }
+    let Some(value) = changed.get("Connected") else {
+        return;
+    };
+    let Ok(connected) = bool::try_from(value) else {
+        return;
+    };
+
+    let mut st = state.lock().unwrap();
+    if dev_mac != st.mac.to_lowercase() {
+        return;
+    }
+    if st.connected == connected {
+        return;
+    }
+    st.connected = connected;
+    st.msg = if connected {
+        "Dispositivo conectado".into()
+    } else {
+        "Dispositivo desconectado".into()
+    };
+    let trigger_apply = connected;
+    drop(st);
+
+    if trigger_apply {
+        apply_profile_on_connect(state);
+    } else {
+        notify("Sony Headphones", "Auriculares desconectados");
+    }
+    if let Some(handle) = HANDLE.get() {
+        handle.update(|_| {});
+    }
+}
+
+fn connection_monitor(state: Arc<Mutex<State>>) {
+    let mut warned = false;
+    loop {
+        if EXITING.load(Ordering::Relaxed) {
+            return;
+        }
+        let result: Result<(), zbus::Error> = (|| {
+            let conn = Connection::system()?;
+            let rule = MatchRule::builder()
+                .msg_type(MsgType::Signal)
+                .sender("org.bluez")?
+                .interface("org.freedesktop.DBus.Properties")?
+                .member("PropertiesChanged")?
+                .path_namespace("/org/bluez")?
+                .build();
+            let mut iter = MessageIterator::for_match_rule(rule, &conn, Some(32))?;
+            for msg in iter.by_ref() {
+                if EXITING.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                match msg {
+                    Ok(m) => handle_bluez_signal(&m, &state),
+                    Err(e) => {
+                        eprintln!("Error al leer señal BlueZ: {e}");
+                        return Err(e);
+                    }
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            if !warned {
+                eprintln!("Monitor de conexión BlueZ no disponible: {e}");
+                warned = true;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
 }
 
 #[derive(Clone)]
@@ -342,7 +505,16 @@ impl Tray for SonyTray {
         let st = self.state.lock().unwrap();
         ToolTip {
             title: "Sony Headphones".into(),
-            description: format!("Perfil: {}\n{}", st.profile.label(), st.msg),
+            description: format!(
+                "Perfil: {}\n{}\n{}",
+                st.profile.label(),
+                if st.connected {
+                    "Conectado"
+                } else {
+                    "Desconectado"
+                },
+                st.msg
+            ),
             ..Default::default()
         }
     }
@@ -409,7 +581,7 @@ impl Tray for SonyTray {
             children
         };
 
-        vec![
+        let mut items: Vec<MenuItem<Self>> = vec![
             StandardItem {
                 label: format!("Perfil actual: {}", st.profile.label()),
                 disposition: ksni::menu::Disposition::Informative,
@@ -454,6 +626,40 @@ impl Tray for SonyTray {
                     let profile = tray.state.lock().unwrap().profile;
                     tray.set_profile(profile);
                 }),
+                ..Default::default()
+            }
+            .into(),
+            SubMenu {
+                label: if st.auto_apply {
+                    "Aplicar perfil al conectar: Activo".into()
+                } else {
+                    "Aplicar perfil al conectar: Inactivo".into()
+                },
+                icon_name: "media-playlist-repeat".into(),
+                submenu: vec![
+                    RadioGroup {
+                        selected: if st.auto_apply { 0 } else { 1 },
+                        select: Box::new(|tray: &mut Self, index: usize| {
+                            let auto = index == 0;
+                            tray.state.lock().unwrap().auto_apply = auto;
+                            save_auto_apply(auto);
+                            if auto {
+                                apply_profile_on_connect(&tray.state);
+                            }
+                        }),
+                        options: vec![
+                            RadioItem {
+                                label: "Activado".into(),
+                                ..Default::default()
+                            },
+                            RadioItem {
+                                label: "Desactivado".into(),
+                                ..Default::default()
+                            },
+                        ],
+                    }
+                    .into(),
+                ],
                 ..Default::default()
             }
             .into(),
@@ -528,7 +734,26 @@ impl Tray for SonyTray {
                 ..Default::default()
             }
             .into(),
-        ]
+        ];
+
+        if !st.mac.trim().is_empty() {
+            items.insert(
+                1,
+                StandardItem {
+                    label: if st.connected {
+                        "Estado: Conectado".into()
+                    } else {
+                        "Estado: Desconectado".into()
+                    },
+                    disposition: ksni::menu::Disposition::Informative,
+                    enabled: false,
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
+        items
     }
 
     fn menu_about_to_show(&mut self) {
@@ -608,6 +833,19 @@ fn load_profile() -> Profile {
     Profile::NoiseCancelling
 }
 
+fn load_auto_apply() -> bool {
+    let p = config_dir().join("autoapply");
+    std::fs::read_to_string(&p)
+        .map(|s| s.trim() == "1")
+        .unwrap_or(true)
+}
+
+fn save_auto_apply(on: bool) {
+    let dir = config_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join("autoapply"), if on { "1\n" } else { "0\n" });
+}
+
 fn main() {
     migrate_config();
 
@@ -638,16 +876,21 @@ fn main() {
     }
 
     let devices = list_sony_devices();
+    let connected = is_connected(&mac);
     let state = Arc::new(Mutex::new(State {
         mac: mac.clone(),
         profile: load_profile(),
         msg: if mac.trim().is_empty() {
             "Sin MAC: elige dispositivo en el menú".into()
+        } else if connected {
+            "Conectado".into()
         } else {
             format!("Listo ({mac})")
         },
         devices,
         devices_fetched_at: Some(Instant::now()),
+        connected,
+        auto_apply: load_auto_apply(),
     }));
 
     let handle = SonyTray { state: Arc::clone(&state) }
@@ -658,6 +901,13 @@ fn main() {
         });
 
     let _ = HANDLE.set(handle.clone());
+
+    let monitor_state = Arc::clone(&state);
+    std::thread::spawn(move || connection_monitor(monitor_state));
+
+    if connected && !mac.trim().is_empty() {
+        apply_profile_on_connect(&state);
+    }
 
     while !EXITING.load(Ordering::Relaxed) {
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -690,6 +940,16 @@ mod tests {
             [0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa]
         );
         assert!(str2ba("no-es-mac").is_err());
+    }
+
+    #[test]
+    fn path_to_mac_reverses_bluez_path() {
+        assert_eq!(
+            path_to_mac("/org/bluez/hci0/dev_88_C9_E8_60_6F_D9").as_deref(),
+            Some("88:c9:e8:60:6f:d9")
+        );
+        assert_eq!(path_to_mac("/org/bluez/hci0"), None);
+        assert_eq!(path_to_mac("/org/bluez/hci0/foo_88_C9"), None);
     }
 
     #[test]

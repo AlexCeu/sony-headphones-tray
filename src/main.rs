@@ -188,6 +188,12 @@ fn notify(title: &str, body: &str) {
     let body = body.to_string();
     std::thread::spawn(move || {
         let ok = Command::new("notify-send")
+            .args([
+                "-a",
+                "Sony Headphones Tray",
+                "-i",
+                "audio-headphones-bluetooth",
+            ])
             .arg(&title)
             .arg(&body)
             .output()

@@ -500,7 +500,12 @@ impl Tray for SonyTray {
     }
 
     fn icon_name(&self) -> String {
-        "audio-headphones-bluetooth".into()
+        let st = self.state.lock().unwrap();
+        if st.connected {
+            "sony-headphones-connected".into()
+        } else {
+            "sony-headphones-disconnected".into()
+        }
     }
 
     fn category(&self) -> ksni::Category {

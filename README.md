@@ -5,6 +5,7 @@ Control del modo de sonido de los auriculares Sony desde la bandeja del sistema 
 ## Características
 
 - Icono de bandeja que muestra el perfil actual aplicado (tooltip) y permite cambiarlo por menú.
+- Icono distinto según el estado: auriculares con ondas al centro si el dispositivo está **conectado**, y auriculares lisos si está **desconectado**.
 - Perfiles: Cancelación de ruido, Reducción de viento, Sonido ambiente, Sin cancelación (OFF).
 - Detección automática del dispositivo desde `bluetoothctl devices`; si hay varios, selector gráfico en el menú.
 - El perfil elegido se persiste en `~/.config/sony-headphones-tray/` y se reenvía al arrancar si se pide.
@@ -39,6 +40,10 @@ sony-headphones-tray
 ```sh
 cargo build --release
 cp target/release/sony-headphones-tray ~/.local/bin/
+
+# Iconos de estado (conectado / desconectado)
+mkdir -p ~/.local/share/icons/hicolor/scalable/devices
+cp icons/sony-headphones-*.svg ~/.local/share/icons/hicolor/scalable/devices/
 ```
 
 ## Autor y créditos

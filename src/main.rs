@@ -176,9 +176,31 @@ fn send_mode(mac: &str, profile: Profile) -> Result<(), String> {
             libc::MSG_NOSIGNAL,
         )
     };
+    if sent < 0 || sent as usize != packet.len() {
+        unsafe { libc::close(fd) };
+        return Err(format!(
+            "Fallo al enviar: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    // El dispositivo responde al comando cuando lo procesa; si no responde es
+    // que aún no está listo y hay que reintentar. Esperamos la confirmación.
+    let tv = libc::timeval { tv_sec: 2, tv_usec: 0 };
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &tv as *const libc::timeval as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+    }
+    let mut buf = [0u8; 64];
+    let n = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
     unsafe { libc::close(fd) };
-    if sent < 0 {
-        return Err(format!("Fallo al enviar: {}", std::io::Error::last_os_error()));
+    if n <= 0 {
+        return Err("El dispositivo no confirmó el cambio (quizá aún no está listo)".into());
     }
     Ok(())
 }
@@ -335,6 +357,9 @@ fn apply_profile_on_connect(state: &Arc<Mutex<State>>) {
     }
     let state = Arc::clone(state);
     std::thread::spawn(move || {
+        // El dispositivo tarda ~1-2 s en aceptar comandos tras conectar; damos
+        // un margen antes del primer intento (send_mode_retry confirma y reintenta).
+        std::thread::sleep(std::time::Duration::from_millis(1500));
         let result = send_mode_retry(&mac, profile);
         let status = match result {
             Ok(()) => format!("{} aplicado al conectar ✓", profile.label()),
@@ -472,7 +497,7 @@ impl SonyTray {
         let state = Arc::clone(&self.state);
         let mac = mac.clone();
         std::thread::spawn(move || {
-            let result = send_mode(&mac, profile);
+            let result = send_mode_retry(&mac, profile);
             let status = match result {
                 Ok(()) => format!("{} ✓", profile.label()),
                 Err(e) => format!("Error: {e}"),
